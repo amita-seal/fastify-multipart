@@ -1,5 +1,5 @@
 import { Busboy, BusboyConfig, BusboyFileStream } from "@fastify/busboy";
-import { FastifyPluginCallback, FastifyRequest } from "fastify";
+import { FastifyPluginCallback } from "fastify";
 import { Readable } from "stream";
 import { FastifyErrorConstructor } from "@fastify/error";
 
@@ -82,7 +82,6 @@ declare namespace fastifyMultipart {
   export type Multipart = MultipartFile | MultipartValue;
 
   export interface MultipartFile {
-    type: 'file';
     toBuffer: () => Promise<Buffer>;
     file: BusboyFileStream;
     fieldname: string;
@@ -93,7 +92,6 @@ declare namespace fastifyMultipart {
   }
 
   export interface MultipartValue<T = unknown> {
-    type: 'field';
     value: T;
     fieldname: string;
     mimetype: string;
@@ -200,7 +198,7 @@ declare namespace fastifyMultipart {
     /**
      * Manage the file stream like you need
      */
-    onFile?: (this: FastifyRequest, part: MultipartFile) => void | Promise<void>;
+    onFile?: (part: MultipartFile) => void | Promise<void>;
   }
 
   export const fastifyMultipart: FastifyMultipartPlugin;

@@ -13,26 +13,20 @@ const sendToWormhole = require('stream-wormhole')
 
 // skipping on Github Actions because it takes too long
 test('should upload a big file in constant memory', { skip: process.env.CI }, function (t) {
-  t.plan(10)
+  t.plan(9)
 
   const fastify = Fastify()
   const hashInput = crypto.createHash('sha256')
 
   t.teardown(fastify.close.bind(fastify))
 
-  fastify.register(multipart, {
-    limits: {
-      fileSize: Infinity,
-      parts: Infinity
-    }
-  })
+  fastify.register(multipart)
 
   fastify.post('/', async function (req, reply) {
     t.ok(req.isMultipart())
 
     for await (const part of req.parts()) {
       if (part.file) {
-        t.equal(part.type, 'file')
         t.equal(part.fieldname, 'upload')
         t.equal(part.filename, 'random-data')
         t.equal(part.encoding, '7bit')

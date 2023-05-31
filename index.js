@@ -7,27 +7,18 @@ const eos = require('end-of-stream')
 const { createWriteStream } = require('fs')
 const { unlink } = require('fs').promises
 const path = require('path')
-const { generateId } = require('./lib/generateId')
+const hexoid = require('hexoid')
 const util = require('util')
 const createError = require('@fastify/error')
 const sendToWormhole = require('stream-wormhole')
 const deepmergeAll = require('@fastify/deepmerge')({ all: true })
-const { PassThrough, pipeline, Readable } = require('stream')
+const { PassThrough, pipeline } = require('stream')
 const pump = util.promisify(pipeline)
 const secureJSON = require('secure-json-parse')
 
 const kMultipart = Symbol('multipart')
 const kMultipartHandler = Symbol('multipartHandler')
 const getDescriptor = Object.getOwnPropertyDescriptor
-
-const PartsLimitError = createError('FST_PARTS_LIMIT', 'reach parts limit', 413)
-const FilesLimitError = createError('FST_FILES_LIMIT', 'reach files limit', 413)
-const FieldsLimitError = createError('FST_FIELDS_LIMIT', 'reach fields limit', 413)
-const RequestFileTooLargeError = createError('FST_REQ_FILE_TOO_LARGE', 'request file too large, please check multipart config', 413)
-const PrototypeViolationError = createError('FST_PROTO_VIOLATION', 'prototype property is not allowed as field name', 400)
-const InvalidMultipartContentTypeError = createError('FST_INVALID_MULTIPART_CONTENT_TYPE', 'the request is not multipart', 406)
-const InvalidJSONFieldError = createError('FST_INVALID_JSON_FIELD_ERROR', 'a request field is not a valid JSON as declared by its Content-Type', 406)
-const FileBufferNotFoundError = createError('FST_FILE_BUFFER_NOT_FOUND', 'the file buffer was not found', 500)
 
 function setMultipart (req, payload, done) {
   // nothing to do, it will be done by the Request.multipart object
@@ -110,13 +101,6 @@ function busboy (options) {
 }
 
 function fastifyMultipart (fastify, options, done) {
-  options.limits = {
-    ...options.limits,
-    parts: options.limits?.parts || 1000,
-    fileSize: options.limits?.fileSize || fastify.initialConfig.bodyLimit
-  }
-
-  const attachFieldsToBody = options.attachFieldsToBody
   if (options.addToBody === true) {
     if (typeof options.sharedSchemaId === 'string') {
       fastify.addSchema({
@@ -157,7 +141,7 @@ function fastifyMultipart (fastify, options, done) {
         req.body = part.fields
         if (part.file) {
           if (options.onFile) {
-            await options.onFile.call(req, part)
+            await options.onFile(part)
           } else {
             await part.toBuffer()
           }
@@ -185,9 +169,18 @@ function fastifyMultipart (fastify, options, done) {
     })
   }
 
-  const defaultThrowFileSizeLimit = typeof options.throwFileSizeLimit === 'boolean'
-    ? options.throwFileSizeLimit
-    : true
+  let throwFileSizeLimit = true
+  if (typeof options.throwFileSizeLimit === 'boolean') {
+    throwFileSizeLimit = options.throwFileSizeLimit
+  }
+
+  const PartsLimitError = createError('FST_PARTS_LIMIT', 'reach parts limit', 413)
+  const FilesLimitError = createError('FST_FILES_LIMIT', 'reach files limit', 413)
+  const FieldsLimitError = createError('FST_FIELDS_LIMIT', 'reach fields limit', 413)
+  const RequestFileTooLargeError = createError('FST_REQ_FILE_TOO_LARGE', 'request file too large, please check multipart config', 413)
+  const PrototypeViolationError = createError('FST_PROTO_VIOLATION', 'prototype property is not allowed as field name', 400)
+  const InvalidMultipartContentTypeError = createError('FST_INVALID_MULTIPART_CONTENT_TYPE', 'the request is not multipart', 406)
+  const InvalidJSONFieldError = createError('FST_INVALID_JSON_FIELD_ERROR', 'a request field is not a valid JSON as declared by its Content-Type', 406)
 
   fastify.decorate('multipartErrors', {
     PartsLimitError,
@@ -195,11 +188,10 @@ function fastifyMultipart (fastify, options, done) {
     FieldsLimitError,
     PrototypeViolationError,
     InvalidMultipartContentTypeError,
-    RequestFileTooLargeError,
-    FileBufferNotFoundError
+    RequestFileTooLargeError
   })
 
-  fastify.addContentTypeParser('multipart/form-data', setMultipart)
+  fastify.addContentTypeParser('multipart', setMultipart)
   fastify.decorateRequest(kMultipartHandler, handleMultipart)
 
   fastify.decorateRequest('parts', getMultipartIterator)
@@ -221,6 +213,8 @@ function fastifyMultipart (fastify, options, done) {
   fastify.addHook('onResponse', async (request, reply) => {
     await request.cleanRequestFiles()
   })
+
+  const toID = hexoid()
 
   function isMultipart () {
     return this.raw[kMultipart] || false
@@ -364,21 +358,15 @@ function fastifyMultipart (fastify, options, done) {
       .on('finish', onEnd)
 
     bb.on('partsLimit', function () {
-      const err = new PartsLimitError()
-      onError(err)
-      process.nextTick(() => onEnd(err))
+      onError(new PartsLimitError())
     })
 
     bb.on('filesLimit', function () {
-      const err = new FilesLimitError()
-      onError(err)
-      process.nextTick(() => onEnd(err))
+      onError(new FilesLimitError())
     })
 
     bb.on('fieldsLimit', function () {
-      const err = new FieldsLimitError()
-      onError(err)
-      process.nextTick(() => onEnd(err))
+      onError(new FieldsLimitError())
     })
 
     request.pipe(bb)
@@ -408,7 +396,6 @@ function fastifyMultipart (fastify, options, done) {
       }
 
       const value = {
-        type: 'field',
         fieldname: name,
         mimetype: contentType,
         encoding,
@@ -438,12 +425,11 @@ function fastifyMultipart (fastify, options, done) {
         return
       }
 
-      const throwFileSizeLimit = typeof options.throwFileSizeLimit === 'boolean'
-        ? options.throwFileSizeLimit
-        : defaultThrowFileSizeLimit
+      if (typeof opts.throwFileSizeLimit === 'boolean') {
+        throwFileSizeLimit = opts.throwFileSizeLimit
+      }
 
       const value = {
-        type: 'file',
         fieldname: name,
         filename,
         encoding,
@@ -522,21 +508,13 @@ function fastifyMultipart (fastify, options, done) {
   }
 
   async function saveRequestFiles (options) {
-    let files
-    if (attachFieldsToBody === true) {
-      // Skip the whole process if the body is empty
-      if (!this.body) {
-        return []
-      }
-      files = filesFromFields.call(this, this.body)
-    } else {
-      files = await this.files(options)
-    }
     const requestFiles = []
     const tmpdir = (options && options.tmpdir) || os.tmpdir()
+
+    const files = await this.files(options)
     this.tmpUploads = []
     for await (const file of files) {
-      const filepath = path.join(tmpdir, generateId() + path.extname(file.filename))
+      const filepath = path.join(tmpdir, toID() + path.extname(file.filename))
       const target = createWriteStream(filepath)
       try {
         await pump(file.file, target)
@@ -549,29 +527,6 @@ function fastifyMultipart (fastify, options, done) {
     }
 
     return requestFiles
-  }
-
-  function * filesFromFields (container) {
-    try {
-      for (const field of Object.values(container)) {
-        if (Array.isArray(field)) {
-          for (const subField of filesFromFields.call(this, field)) {
-            yield subField
-          }
-        }
-        if (!field.file) {
-          continue
-        }
-        if (!field._buf) {
-          throw new FileBufferNotFoundError()
-        }
-        field.file = Readable.from(field._buf)
-        yield field
-      }
-    } catch (err) {
-      this.log.error({ err }, 'save request file failed')
-      throw err
-    }
   }
 
   async function cleanRequestFiles () {
@@ -620,13 +575,15 @@ function fastifyMultipart (fastify, options, done) {
   done()
 }
 
+const _fastifyMultipart = fp(fastifyMultipart, {
+  fastify: '4.x',
+  name: '@fastify/multipart'
+})
+
 /**
  * These export configurations enable JS and TS developers
  * to consumer fastify in whatever way best suits their needs.
  */
-module.exports = fp(fastifyMultipart, {
-  fastify: '4.x',
-  name: '@fastify/multipart'
-})
-module.exports.default = fastifyMultipart
-module.exports.fastifyMultipart = fastifyMultipart
+module.exports = _fastifyMultipart
+module.exports.fastifyMultipart = _fastifyMultipart
+module.exports.default = _fastifyMultipart

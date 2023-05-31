@@ -28,6 +28,7 @@ If you are looking for the documentation for the legacy callback-api please see 
 const fastify = require('fastify')()
 const fs = require('fs')
 const util = require('util')
+const path = require('path')
 const { pipeline } = require('stream')
 const pump = util.promisify(pipeline)
 
@@ -83,13 +84,10 @@ fastify.register(require('@fastify/multipart'), {
     fields: 10,         // Max number of non-file fields
     fileSize: 1000000,  // For multipart forms, the max file size in bytes
     files: 1,           // Max number of file fields
-    headerPairs: 2000,  // Max number of header key=>value pairs
-    parts: 1000         // For multipart forms, the max number of parts (fields + files)
+    headerPairs: 2000   // Max number of header key=>value pairs
   }
 });
 ```
-
-For security reasons, `@fastify/multipart` sets the limit for `parts` and `fileSize` being _1000_ and _1048576_ respectively.
 
 **Note**: if the file stream that is provided by `data.file` is not consumed, like in the example below with the usage of pump, the promise will not be fulfilled at the end of the multipart processing.
 This behavior is inherited from [`@fastify/busboy`](https://github.com/fastify/busboy).
@@ -147,10 +145,9 @@ fastify.post('/', async function (req, reply) {
 fastify.post('/upload/raw/any', async function (req, reply) {
   const parts = req.parts()
   for await (const part of parts) {
-    if (part.type === 'file') {
+    if (part.file) {
       await pump(part.file, fs.createWriteStream(part.filename))
     } else {
-      // part.type === 'field
       console.log(part)
     }
   }
@@ -178,7 +175,6 @@ This will store all files in the operating system default directory for temporar
 fastify.post('/upload/files', async function (req, reply) {
   // stores files to tmp dir and return files
   const files = await req.saveRequestFiles()
-  files[0].type // "file"
   files[0].filepath
   files[0].fieldname
   files[0].filename
@@ -255,8 +251,6 @@ You can also define an `onFile` handler to avoid accumulating all files in memor
 
 ```js
 async function onFile(part) {
-  // you have access to original request via `this`
-  console.log(this.id)
   await pump(part.file, fs.createWriteStream(part.filename))
 }
 
@@ -297,7 +291,6 @@ fastify.register(require('@fastify/multipart'), { attachFieldsToBody: 'keyValues
 
 fastify.post('/upload/files', {
   schema: {
-    consumes: ['multipart/form-data'],
     body: {
       type: 'object',
       required: ['myFile'],
@@ -332,7 +325,6 @@ fastify.register(require('@fastify/multipart'), opts)
 
 fastify.post('/upload/files', {
   schema: {
-    consumes: ['multipart/form-data'],
     body: {
       type: 'object',
       required: ['myField'],
@@ -373,57 +365,6 @@ The shared schema, that is added, will look like this:
   }
 }
 ```
-
-### JSON Schema with Swagger
-
-If you want to use `@fastify/multipart` with `@fastify/swagger` and `@fastify/swagger-ui` you must add a new type called `isFile` and use custom instance of validator compiler [Docs](https://www.fastify.io/docs/latest/Reference/Validation-and-Serialization/#validator-compiler).
-
-```js
-
-const ajvFilePlugin = (ajv, options = {}) => {
- return ajv.addKeyword({
-  keyword: "isFile",
-  compile: (_schema, parent, _it) => {
-   parent.type = "file";
-   delete parent.isFile;
-   return () => true;
-  },
- });
-};
-const fastify = require('fastify')({
- // ...
-  ajv: {
-    // add the new ajv plugin
-    plugins: [/*...*/ ajvFilePlugin]
-  }
-})
-const opts = {
-  attachFieldsToBody: true,
-};
-fastify.register(require(".."), opts);
-
-fastify.post(
-  "/upload/files",
-  {
-    schema: {
-      consumes: ["multipart/form-data"],
-      body: {
-        type: "object",
-        required: ["myField"],
-        properties: {
-          myField: { isFile: true },
-        },
-      },
-    },
-  },
-  function (req, reply) {
-    console.log({ body: req.body });
-    reply.send("done");
-  }
-);
-
-```
-
 
 ### JSON Schema non-file field
 When sending fields with the body (`attachFieldsToBody` set to true), the field might look like this in the `request.body`:
@@ -486,7 +427,6 @@ fastify.register(require('@fastify/multipart'), opts)
 
 fastify.post('/upload/files', {
   schema: {
-    consumes: ['multipart/form-data'],
     body: {
       type: 'object',
       required: ['field'],

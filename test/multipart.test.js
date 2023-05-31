@@ -17,7 +17,7 @@ const sendToWormhole = require('stream-wormhole')
 const filePath = path.join(__dirname, '../README.md')
 
 test('should parse forms', function (t) {
-  t.plan(9)
+  t.plan(8)
 
   const fastify = Fastify()
   t.teardown(fastify.close.bind(fastify))
@@ -27,7 +27,6 @@ test('should parse forms', function (t) {
   fastify.post('/', async function (req, reply) {
     for await (const part of req.parts()) {
       if (part.file) {
-        t.equal(part.type, 'file')
         t.equal(part.fieldname, 'upload')
         t.equal(part.filename, 'README.md')
         t.equal(part.encoding, '7bit')
@@ -77,7 +76,7 @@ test('should parse forms', function (t) {
 })
 
 test('should respond when all files are processed', function (t) {
-  t.plan(6)
+  t.plan(4)
 
   const fastify = Fastify()
   t.teardown(fastify.close.bind(fastify))
@@ -88,7 +87,6 @@ test('should respond when all files are processed', function (t) {
     const parts = req.files()
     for await (const part of parts) {
       t.ok(part.file)
-      t.equal(part.type, 'file')
       await sendToWormhole(part.file)
     }
     reply.code(200).send()
@@ -260,6 +258,8 @@ test('should error if boundary is empty', function (t) {
 })
 
 test('should throw error due to filesLimit (The max number of file fields (Default: Infinity))', function (t) {
+  t.plan(4)
+
   const fastify = Fastify()
   t.teardown(fastify.close.bind(fastify))
 
@@ -269,12 +269,12 @@ test('should throw error due to filesLimit (The max number of file fields (Defau
     try {
       const parts = req.files({ limits: { files: 1 } })
       for await (const part of parts) {
-        t.ok(part.file, 'part received')
+        t.ok(part.file)
         await sendToWormhole(part.file)
       }
       reply.code(200).send()
     } catch (error) {
-      t.ok(error instanceof fastify.multipartErrors.FilesLimitError, 'error')
+      t.ok(error instanceof fastify.multipartErrors.FilesLimitError)
       reply.code(500).send()
     }
   })
@@ -291,34 +291,22 @@ test('should throw error due to filesLimit (The max number of file fields (Defau
       method: 'POST'
     }
 
-    let ended = false
     const req = http.request(opts, (res) => {
-      t.equal(res.statusCode, 500, 'status code')
+      t.equal(res.statusCode, 500)
       res.resume()
       res.on('end', () => {
-        if (ended) {
-          return
-        }
-        ended = true
         t.pass('res ended successfully')
-        t.end()
       })
     })
     form.append('upload', fs.createReadStream(filePath))
     form.append('upload2', fs.createReadStream(filePath))
     form.pipe(req)
-    req.on('error', (err) => {
-      if (ended) {
-        return
-      }
-      ended = true
-      t.equal(err.code, 'ECONNRESET')
-      t.end()
-    })
   })
 })
 
 test('should be able to configure limits globally with plugin register options', function (t) {
+  t.plan(4)
+
   const fastify = Fastify()
   t.teardown(fastify.close.bind(fastify))
 
@@ -329,7 +317,6 @@ test('should be able to configure limits globally with plugin register options',
       const parts = req.files()
       for await (const part of parts) {
         t.ok(part.file)
-        t.equal(part.type, 'file')
         await sendToWormhole(part.file)
       }
       reply.code(200).send()
@@ -339,7 +326,7 @@ test('should be able to configure limits globally with plugin register options',
     }
   })
 
-  fastify.listen({ port: 0 }, function () {
+  fastify.listen({ port: 0 }, async function () {
     // request
     const form = new FormData()
     const opts = {
@@ -351,31 +338,21 @@ test('should be able to configure limits globally with plugin register options',
       method: 'POST'
     }
 
-    let ended = false
     const req = http.request(opts, (res) => {
       t.equal(res.statusCode, 500)
       res.resume()
       res.on('end', () => {
-        if (ended) {
-          return
-        }
-        ended = true
         t.pass('res ended successfully')
-        t.end()
       })
     })
     form.append('upload', fs.createReadStream(filePath))
     form.append('upload2', fs.createReadStream(filePath))
-    req.on('error', (err) => {
-      if (ended) {
-        return
-      }
-      ended = true
-      t.equal(err.code, 'ECONNRESET')
-      t.end()
-    })
 
-    pump(form, req).catch(() => {})
+    try {
+      await pump(form, req)
+    } catch (error) {
+      t.error(error, 'formData request pump: no err')
+    }
   })
 })
 
@@ -399,7 +376,7 @@ test('should throw error due to fieldsLimit (Max number of non-file fields (Defa
     }
   })
 
-  fastify.listen({ port: 0 }, function () {
+  fastify.listen({ port: 0 }, async function () {
     // request
     const form = new FormData()
     const opts = {
@@ -472,7 +449,7 @@ test('should throw error due to partsLimit (The max number of parts (fields + fi
 })
 
 test('should throw error due to file size limit exceed (Default: true)', function (t) {
-  t.plan(6)
+  t.plan(4)
 
   const fastify = Fastify()
   t.teardown(fastify.close.bind(fastify))
@@ -484,7 +461,6 @@ test('should throw error due to file size limit exceed (Default: true)', functio
       const parts = req.files()
       for await (const part of parts) {
         t.ok(part.file)
-        t.equal(part.type, 'file')
         await sendToWormhole(part.file)
       }
       reply.code(200).send()
@@ -520,7 +496,7 @@ test('should throw error due to file size limit exceed (Default: true)', functio
 })
 
 test('should not throw error due to file size limit exceed - files setting (Default: true)', function (t) {
-  t.plan(5)
+  t.plan(3)
 
   const fastify = Fastify()
   t.teardown(fastify.close.bind(fastify))
@@ -531,7 +507,6 @@ test('should not throw error due to file size limit exceed - files setting (Defa
     const parts = req.files({ limits: { fileSize: 1 } })
     for await (const part of parts) {
       t.ok(part.file)
-      t.equal(part.type, 'file')
       await sendToWormhole(part.file)
     }
     reply.code(200).send()
@@ -562,7 +537,7 @@ test('should not throw error due to file size limit exceed - files setting (Defa
 })
 
 test('should not miss fields if part handler takes much time than formdata parsing', async function (t) {
-  t.plan(12)
+  t.plan(11)
 
   const original = fs.readFileSync(filePath, 'utf8')
   const immediate = util.promisify(setImmediate)
@@ -581,7 +556,6 @@ test('should not miss fields if part handler takes much time than formdata parsi
 
     for await (const part of req.parts()) {
       if (part.file) {
-        t.equal(part.type, 'file')
         t.equal(part.fieldname, 'upload')
         t.equal(part.filename, 'README.md')
         t.equal(part.encoding, '7bit')
